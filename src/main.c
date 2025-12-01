@@ -18,12 +18,98 @@ typedef struct vec4 {
     };
 } vec4;
 
+typedef struct vec2 {
+    union {
+        struct {
+            double x;
+            double y;
+        };
+
+        double values[2];
+    };
+} vec2;
+
+typedef struct uvec3 {
+    union {
+        struct {
+            size_t x;
+            size_t y;
+            size_t z;
+        };
+
+        size_t values[3];
+    };
+} uvec3;
+
+typedef struct triangle {
+    union {
+        struct {
+            vec2 a;
+            vec2 b;
+            vec2 c;
+        };
+
+        vec2 values[3];
+    };
+} triangle;
+
 typedef struct mat4x4 {
     vec4 values[4];
 } mat4x4;
 
-double dot(const vec4* a, const vec4* b) {
+double vec4_dot(const vec4* a, const vec4* b) {
     return (a->x * b->x) + (a->y * b->y) + (a->z * b->z) + (a->w * b->w);
+}
+
+vec2 vec2_sub(const vec2* a, const vec2* b) {
+    vec2 result;
+
+    result.x = a->x - b->x;
+    result.y = a->y - b->y;
+
+    return result;
+}
+
+double vec2_dot(const vec2* a, const vec2* b) {
+    return (a->x * b->x) + (a->y * b->y);
+}
+
+vec2 vec2_rdiag(const vec2* a) {
+    vec2 result;
+
+    result.x = a->y;
+    result.y = -a->x;
+
+    return result;
+}
+
+vec2 vec2_ldiag(const vec2* a) {
+    vec2 result;
+
+    result.x = -a->y;
+    result.y = a->x;
+
+    return result;
+}
+
+bool triangle_test(const triangle* tri, const vec2* point) {
+    vec2 ab_edge = vec2_sub(&tri->b, &tri->a);
+    vec2 ca_edge = vec2_sub(&tri->a, &tri->c);
+    vec2 bc_edge = vec2_sub(&tri->c, &tri->b);
+
+    vec2 ab_diag = vec2_rdiag(&ab_edge);
+    vec2 ca_diag = vec2_rdiag(&ca_edge);
+    vec2 bc_diag = vec2_rdiag(&bc_edge);
+
+    vec2 a_pdist = vec2_sub(point, &tri->a);
+    vec2 c_pdist = vec2_sub(point, &tri->c);
+    vec2 b_pdist = vec2_sub(point, &tri->b);
+
+    double a_dist = vec2_dot(&ab_diag, &a_pdist);
+    double b_dist = vec2_dot(&ca_diag, &c_pdist);
+    double c_dist = vec2_dot(&bc_diag, &b_pdist);
+
+    return (a_dist <= 0.0 && b_dist <= 0.0 && c_dist <= 0.0);
 }
 
 vec4 row(const mat4x4* mat, size_t n) {
@@ -56,7 +142,7 @@ mat4x4 multiply(const mat4x4* a, const mat4x4* b) {
         for (size_t j = 0; j < 4; j++) {
             const vec4* row = &ax.values[j];
 
-            result.values[i].values[j] = dot(row, col);
+            result.values[i].values[j] = vec4_dot(row, col);
         }
     }
 
@@ -70,7 +156,7 @@ vec4 transform(const mat4x4* a, const vec4* b) {
     for (size_t i = 0; i < 4; i++) {
         const vec4* row = &ax.values[i];
 
-        result.values[i] = dot(row, b);
+        result.values[i] = vec4_dot(row, b);
     }
 
     return result;
@@ -143,7 +229,7 @@ void clear(char* screen, size_t width, size_t height) {
         }
     }
 
-    // printf("\x1b[H");
+    printf("\x1b[H");
 }
 
 void present(char* screen, size_t width, size_t height) {
@@ -156,7 +242,7 @@ void present(char* screen, size_t width, size_t height) {
     }
 }
 
-size_t ndc_axis_to_pixel(float axis, size_t min, size_t max) {
+size_t ndc_axis_to_pixel(double axis, size_t res) {
     if (axis < -1.0) {
         axis = -1.0;
     }
@@ -166,12 +252,19 @@ size_t ndc_axis_to_pixel(float axis, size_t min, size_t max) {
     }
 
     double normalized = (axis + 1.0) * 0.5;
-    double pixel = min + normalized * (max - min);
+    double pixel = normalized * res;
 
     return (size_t)round(pixel);
 }
 
-void set(vec4* point, char value, char* screen, size_t width, size_t height) {
+double pixel_axis_to_ndc(size_t axis, size_t res) {
+    double daxis = (double)axis;
+    double dres = (double)res;
+
+    return (2 * (daxis / dres)) - 1;
+}
+
+void set(vec2* point, char value, char* screen, size_t width, size_t height) {
     double x = point->x;
     double y = point->y;
 
@@ -179,8 +272,8 @@ void set(vec4* point, char value, char* screen, size_t width, size_t height) {
         return;
     }
 
-    size_t ix = ndc_axis_to_pixel(x, 0, width);
-    size_t iy = ndc_axis_to_pixel(y, 0, height);
+    size_t ix = ndc_axis_to_pixel(x, width);
+    size_t iy = ndc_axis_to_pixel(y, height);
 
     screen[iy * width + ix] = value;
 }
@@ -210,6 +303,16 @@ mat4x4 translate(double x, double y, double z) {
     return result;
 }
 
+mat4x4 scale(double x, double y, double z) {
+    mat4x4 result = identity();
+
+    result.values[0].x = x;
+    result.values[1].y = y;
+    result.values[2].z = z;
+
+    return result;
+}
+
 int main(void) {
     const size_t WIDTH = 80;
     const size_t HEIGHT = 40;
@@ -224,49 +327,114 @@ int main(void) {
     const double TARGET_FRAME_TIME = 1.0 / TARGET_FPS;
 
     vec4 model[8] = {
-        {.x = 0.5, .y = 0.5, .z = 0.5, .w = 1.0},
-        {.x = -0.5, .y = 0.5, .z = 0.5, .w = 1.0},
-        {.x = 0.5, .y = -0.5, .z = 0.5, .w = 1.0},
-        {.x = -0.5, .y = -0.5, .z = 0.5, .w = 1.0},
-        {.x = 0.5, .y = 0.5, .z = -0.5, .w = 1.0},
-        {.x = -0.5, .y = 0.5, .z = -0.5, .w = 1.0},
-        {.x = 0.5, .y = -0.5, .z = -0.5, .w = 1.0},
-        {.x = -0.5, .y = -0.5, .z = -0.5, .w = 1.0},
+        {0.5, 0.5, 0.5, 1.0},
+        {-0.5, 0.5, 0.5, 1.0},
+        {0.5, -0.5, 0.5, 1.0},
+        {-0.5, -0.5, 0.5, 1.0},
+        {0.5, 0.5, -0.5, 1.0},
+        {-0.5, 0.5, -0.5, 1.0},
+        {0.5, -0.5, -0.5, 1.0},
+        {-0.5, -0.5, -0.5, 1.0},
     };
+
+    uvec3 tris[12] = {
+        {0, 1, 2},
+        {2, 1, 3},
+        {4, 6, 5},
+        {6, 7, 5},
+        {0, 2, 4},
+        {2, 6, 4},
+        {1, 5, 3},
+        {3, 5, 7},
+        {0, 4, 1},
+        {1, 4, 5},
+        {2, 3, 6},
+        {3, 7, 6},
+    };
+
+    triangle triangles[12];
 
     clock_t last_time = clock();
 
     mat4x4 proj = perspective(PI * 0.5, (double)WIDTH / (double)HEIGHT, 0.1, 100.0);
+    mat4x4 trans = translate(0.0, 0.0, -4.0);
+    mat4x4 scl = scale(1.0, 1.0, 1.0);
 
     while (true) {
         clock_t now = clock();
         double delta_time = (double)(now - last_time) / CLOCKS_PER_SEC;
-        mat4x4 trans = translate(0.0, 0.0, -3.0);
 
         if (delta_time >= TARGET_FRAME_TIME) {
             last_time = now;
 
             clear((char*)screen, WIDTH, HEIGHT);
 
+            mat4x4 final = identity();
+
             mat4x4 rot_x = rotation_x(rx);
             mat4x4 rot_y = rotation_y(ry);
             mat4x4 rot_z = rotation_z(rz);
 
-            mat4x4 finalTransform = multiply(&proj, &trans);
+            final = multiply(&final, &proj);
+            final = multiply(&final, &trans);
+            final = multiply(&final, &rot_z);
+            final = multiply(&final, &rot_y);
+            final = multiply(&final, &rot_x);
+            final = multiply(&final, &scl);
 
-            finalTransform = multiply(&finalTransform, &rot_z);
-            finalTransform = multiply(&finalTransform, &rot_y);
-            finalTransform = multiply(&finalTransform, &rot_x);
+            vec2 points[8];
 
             for (size_t i = 0; i < 8; i++) {
-                vec4 point = transform(&finalTransform, &model[i]);
+                vec4 point = transform(&final, &model[i]);
 
                 point.x /= point.w;
                 point.y /= point.w;
                 point.z /= point.w;
-                point.y *= 0.5;
+                point.y *= 0.75;
 
-                set(&point, '@', (char*)screen, WIDTH, HEIGHT);
+                if (point.x > 1.0 && point.x < -1.0) {
+                    continue;
+                }
+
+                if (point.y > 1.0 && point.y < -1.0) {
+                    continue;
+                }
+
+                if (point.z > 1.0 && point.z < -1.0) {
+                    continue;
+                }
+
+                vec2 trunc = {
+                    .x = point.x,
+                    .y = point.y,
+                };
+
+                points[i] = trunc;
+            }
+
+            for (size_t i = 0; i < 12; i++) {
+                uvec3* indices = &tris[i];
+
+                triangle* tri = &triangles[i];
+
+                tri->a = points[indices->x];
+                tri->b = points[indices->y];
+                tri->c = points[indices->z];
+            }
+
+            for (size_t y = 0; y < HEIGHT; y++) {
+                for (size_t x = 0; x < WIDTH; x++) {
+                    vec2 p = {
+                        .x = pixel_axis_to_ndc(x, WIDTH),
+                        .y = pixel_axis_to_ndc(y, HEIGHT),
+                    };
+
+                    for (size_t i = 0; i < 12; i++) {
+                        if (triangle_test(&triangles[i], &p)) {
+                            set(&p, i + 80, (char*)screen, WIDTH, HEIGHT);
+                        }
+                    }
+                }
             }
 
             rx += 0.25 * PI * delta_time;
